@@ -106,14 +106,15 @@ class NeuralNetwork:
             return output
 
     def mse_loss(self, y_true, y_pred):  
-        #MSE
-        return np.mean((y_pred - y_true)**2)
+        return np.mean((y_true - y_pred)**2)
+    
+    def derivative_mse_loss(self, y_true, y_pred):   # 對y_pred微分
+        return -2* (y_true - y_pred)
     
     def backward(self, x, y_true, y_pred, mode):  # output = y_pred    
-
         if mode == "sigmoid":
             # 計算輸出層的梯度
-            output_error = y_pred - y_true  # (n, 1)
+            output_error = self.derivative_mse_loss(y_true, y_pred)  # (n, 1)
             output_delta = output_error * self.derivative_sigmoid(y_pred)  # (n, 1)
 
             # 計算第二個隱藏層的梯度
@@ -126,7 +127,7 @@ class NeuralNetwork:
         
         elif mode == "relu":
             # 計算輸出層的梯度
-            output_error = y_pred - y_true
+            output_error = self.derivative_mse_loss(y_true, y_pred)
             output_delta = output_error * self.derivative_relu(y_pred)
 
             # 計算第二個隱藏層的梯度
@@ -139,7 +140,7 @@ class NeuralNetwork:
 
         elif mode == "None":
             # 計算輸出層的梯度
-            output_error = y_pred - y_true
+            output_error = self.derivative_mse_loss(y_true, y_pred)
             output_delta = output_error 
 
             # 計算第二個隱藏層的梯度
@@ -160,13 +161,16 @@ class NeuralNetwork:
         self.bias_input_hidden_1 -= self.learning_rate * np.sum(hidden_1_delta, axis=0)
 
 
-    def accuracy(self, y_pred, y_true):
-        """
-        計算模型的精度
-        """
+    def accuracy(self, y_true, y_pred):
         # 四捨五入預測輸出為 0 或 1
-        y_pred_round = np.round(y_pred)   # 当整数部分以0结束时，round函数一律是向下取整
-        
+        y_pred_round = []
+        for i in range(y_pred.shape[0]):
+            if y_pred[i] > 0.5:
+                y_pred_round.append(1)
+            else:
+                y_pred_round.append(0)
+        y_pred_round = np.array(y_pred_round).reshape((y_pred.shape[0], 1))
+
         # 將預測輸出與真實標籤進行比較
         correct = (y_pred_round == y_true).sum()
         total = y_true.shape[0]
@@ -188,8 +192,8 @@ class NeuralNetwork:
             self.backward(x, y_true, y_pred, mode)
             
             # 每 1000 個 epoch 打印一次損失
-            if i % 100 == 0:
-                acc = self.accuracy(y_pred, y_true)
+            if i % 2000 == 0:
+                acc = self.accuracy(y_true, y_pred)
                 print("Epoch {}, Loss: {:.4f}, Acc: {:.4f}".format(i, loss, acc))
         print("End training!!!")
 
@@ -232,14 +236,14 @@ class NeuralNetwork:
 if __name__ == '__main__':
     # random input
     x, y = generate_linear(n = 100)
-    NN = NeuralNetwork(2, 4, 4, 1, 0.001)  # init the class
-    y_pred = NN.train(x, y, epochs = 2000,  mode = "relu")   # sigmoid要10000配0.01 -> acc = 1.0; relu要2000配0.001; None要200配0.0001 -> acc = 0.99
+    NN = NeuralNetwork(2, 4, 4, 1, 0.01)  # init the class
+    y_pred = NN.train(x, y, epochs = 10000,  mode = "sigmoid")   # sigmoid要10000配0.01 -> acc = 1.0; relu要2000配0.001; None要200配0.0001 -> acc = 0.99
     NN.draw_loss_plot()
     NN.show_result(x, y, y_pred)
 
     # XOR input
     x, y = generate_XOR_easy() 
-    NN = NeuralNetwork(2, 4, 4, 1, 0.001)  # init the class
-    y_pred = NN.train(x, y, epochs = 10000, mode = "relu")  # sigmoid要30000配0.01 -> acc = 1.0; relu要10000配0.001(有時候會失敗); None無法
+    NN = NeuralNetwork(2, 4, 4, 1, 0.01)  # init the class
+    y_pred = NN.train(x, y, epochs = 30000, mode = "sigmoid")  # sigmoid要30000配0.01 -> acc = 1.0; relu要10000配0.001(有時候會失敗); None無法
     NN.draw_loss_plot()
     NN.show_result(x, y, y_pred)
