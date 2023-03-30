@@ -177,7 +177,12 @@ public:
 				space[num++] = i;
 			}
 		if (num)
-			set(space[rand() % num], rand() % 10 ? 1 : 2);
+			set(space[rand() % num], rand() % 10 ? 1 : 2);    
+			/*此代碼在隨機生成的索引處將名為“space”的數組中的一個元素設置為 1 或 2。 
+			生成的索引基於調用 rand() 函數的結果的餘數除以名為“num”的變量的值。 
+			表達式“rand() % 10 ? 1 : 2”是一個三元運算符，它從 1 或 2 生成隨機整數，
+			有 90% 的概率為 1，有 10% 的概率為 2。 此表達式用作 set() 函數的參數，
+			該函數將指定索引處的“space”數組中的元素設置為該值。*/
 	}
 
 	/**
@@ -420,6 +425,12 @@ protected:
  */
 class pattern : public feature {
 public:
+	/*其中，feature 的初始化值是 1 << (p.size() * 4)，表示將 p 中
+	的每個數字轉換成 4 個二進位位元，得到的二進位序列拼接起來所對應的
+	十進位數字。例如，如果 p 中有 3 個數字，則 feature 的值為 
+	$2^{3\times 4} = 2^{12} = 4096$。而 iso_last 的初始化值是 iso，
+	表示將 iso 賦值給 iso_last。如果呼叫這個建構函式時沒有提供 iso 的值，
+	則預設值為 8。*/
 	pattern(const std::vector<int>& p, int iso = 8) : feature(1 << (p.size() * 4)), iso_last(iso) {
 		if (p.empty()) {
 			error << "no pattern defined" << std::endl;
@@ -440,7 +451,7 @@ public:
 		 * |     2     4    32   128| ----> |     8    32    64   128|
 		 * |     4     2     8    16|       |    16   128   256     4|
 		 * +------------------------+       +------------------------+
-		 *
+		 * 可以用對應的位元運算來計算出 isomorphic patterns
 		 * therefore if we make a board whose value is 0xfedcba9876543210ull (the same as index)
 		 * we would be able to use the above method to calculate its 8 isomorphisms
 		 */
@@ -458,13 +469,29 @@ public:
 	pattern& operator =(const pattern& p) = delete;
 
 public:
-
+	/*
+	V(s) = V(s)+a(r + V(s'') - V(s))  更新V(s)
+	estimate和update函数的实现都是遍历一个预定义的 isom 数组中的所有变换，并计算每个变换在内部表格中的索引，然后将这些索引对应的值累加起来，得到最终的估值。
+	在learn_from_episode函数中，我们会调用这两个函数来计算当前局面的估值，以及更新当前局面的估值。
+	*/
+	/*
+    这段代码实现了一个评估函数 estimate，接受一个棋盘 b 作为参数，并返回一个浮点数，表示棋盘状态的估值。
+    该函数首先初始化一个名为 value 的浮点数变量，用于累计所有变换之后的估值。然后遍历一个预定义的 isom 
+    数组中的所有变换，并计算每个变换在内部表格中的索引。这里，indexof(isom[i], b) 函数返回一个整数值，
+    表示将棋盘 b 进行变换 isom[i] 后的状态在内部表格中的索引。最后，使用 operator[] 函数访问内部表格，
+    并将每个变换的估值相加到 value 变量中，以得到最终的估值。这个评估函数用于静态评估棋盘状态，以帮助搜索算法找到最佳下一步。
+    */
 	/**
 	 * estimate the value of a given board
 	 */
-	virtual float estimate(const board& b) const {
+	virtual float estimate(const board& b) const {    
 		// TODO
-
+		float value = 0;
+		for (int i = 0; i < iso_last; i++) {    //遍历一个预定义的 isom 数组中的所有变换，并计算每个变换在内部表格中的索引
+			size_t index = indexof(isomorphic[i], b);  
+			value += operator[](index);
+		}
+		return value;
 	}
 
 	/**
@@ -472,7 +499,19 @@ public:
 	 */
 	virtual float update(const board& b, float u) {
 		// TODO
-
+		/*
+		V(s) = V(s)+alpha(r + V(s'') - V(s)) --> V(s) = V(s)+ r + alpha* (V(s'') - V(s))
+		--> V(s) = V(s)+ reward+ (alpha * error)
+		更新V(s)
+		*/  
+		float adjust = u / iso_last;  //u = alpha * error
+		float value = 0;
+		for (int i = 0; i < iso_last; i++) {
+			size_t index = indexof(isomorphic[i], b);   //indexof函数 (定義的)，遍歷所有的isom(共8個)去將一個棋盤b狀態一直更新，它的作用是将给定的棋盘状态应用给定的变换，然后返回一个整数值，表示这个变换之后的状态在内部表格中的索引。
+			operator[](index) += adjust;
+			value += operator[](index);
+		}
+		return value;
 	}
 
 	/**
@@ -510,6 +549,21 @@ protected:
 
 	size_t indexof(const std::vector<int>& patt, const board& b) const {
 		// TODO
+		/*
+		<< 是 C++ 中的左移位運算符。對於一個整數 a 和一個非負整數 b，a << b 表示將 a 的二進制
+		表示向左移動 b 位，右邊補 0，然後將結果作為一個新的整數返回。
+		在給定的代碼中，表達式 b.at(patt[i]) << (4 * i) 是將 b.at(patt[i]) 左移 4 * i 位。
+		由於棋盤的每個位置可以有 16 種不同的狀態（空、X、O 其中之一），因此可以使用 4 個位元來
+		存儲每個位置的狀態。因此，整個棋盤的狀態可以用一個長度為 4 * patt.size() 的二進制數字
+		來表示，其中 patt.size() 是棋盤中可用的位置數量。由於 index 是用來存儲這個二進制數字的整數，
+		所以在這裡使用左移位運算符來將每個位置的狀態放到正確的位置上，從而構造出整個棋盤的狀態對應的整數值。
+		*/
+
+		size_t index = 0;
+		for (size_t i = 0; i < patt.size(); i++) {
+			index += b.at(patt[i]) << (4 * i);  //將棋盤狀態轉換成整數
+		}
+		return index;
 	}
 
 	std::string nameof(const std::vector<int>& patt) const {
@@ -681,7 +735,10 @@ public:
 		for (state* move = after; move != after + 4; move++) {
 			if (move->assign(b)) {
 				// TODO
-
+				//選出最好的環境state(對全部estimate的環境做平均)
+				// 選擇最佳的環境state(b)
+				//利用平均的方式
+				move->set_value(move->reward() + estimate(move->after_state()));
 				if (move->value() > best->value())
 					best = move;
 			} else {
@@ -708,7 +765,14 @@ public:
 	 */
 	void update_episode(std::vector<state>& path, float alpha = 0.1) const {
 		// TODO
-
+		//利用alpha來更新環境
+		float target = 0;
+		for (path.pop_back() /* terminal state */; path.size(); path.pop_back()) {
+			state& move = path.back();
+			float error = target - estimate(move.after_state());
+			target = move.reward() + update(move.after_state(), alpha * error);
+			debug << "update error = " << error << " for" << std::endl << move.after_state();
+		}
 	}
 
 	/**
@@ -760,11 +824,15 @@ public:
 				info << "\t" << ((1 << t) & -2u) << "\t" << (accu * coef) << "%";
 				info << "\t(" << (stat[t] * coef) << "%)" << std::endl;
 			}
+
+			//display the current board 
+			info << b << std::endl;
+	
 			scores.clear();
 			maxtile.clear();
 		}
 	}
-
+	
 	/**
 	 * display the weight information of a given board
 	 */
@@ -828,8 +896,8 @@ int main(int argc, const char* argv[]) {
 
 	// set the learning parameters
 	float alpha = 0.1;
-	size_t total = 100000;
-	unsigned seed;
+	size_t total = 10000;
+	unsigned seed;   //seed 只能是無負號整數
 	__asm__ __volatile__ ("rdtsc" : "=a" (seed));
 	info << "alpha = " << alpha << std::endl;
 	info << "total = " << total << std::endl;
@@ -841,9 +909,11 @@ int main(int argc, const char* argv[]) {
 	tdl.add_feature(new pattern({ 4, 5, 6, 7, 8, 9 }));
 	tdl.add_feature(new pattern({ 0, 1, 2, 4, 5, 6 }));
 	tdl.add_feature(new pattern({ 4, 5, 6, 8, 9, 10 }));
+	// tdl.add_feature(new pattern({ 0, 1, 2, 3, 6, 7 }));
+	// tdl.add_feature(new pattern({ 4, 5, 6, 7, 10, 11 }));
 
 	// restore the model from file
-	tdl.load("");
+	tdl.load("henry_weight.bin");
 
 	// train the model
 	std::vector<state> path;
@@ -878,7 +948,7 @@ int main(int argc, const char* argv[]) {
 	}
 
 	// store the model into file
-	tdl.save("");
+	tdl.save("henry_weight.bin");
 
 	return 0;
 }
