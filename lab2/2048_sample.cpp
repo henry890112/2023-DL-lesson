@@ -27,6 +27,9 @@
 #include <fstream>
 #include <cmath>
 
+#include "matplotlibcpp.h"
+namespace plt = matplotlibcpp;
+
 /**
  * output streams
  * to enable debugging (more output), just change the line to 'std::ostream& debug = std::cout;'
@@ -827,7 +830,10 @@ public:
 
 			//display the current board 
 			info << b << std::endl;
+			//store the mean score in the vector mean_score and draw the graph
+			mean_score.push_back(mean);
 	
+			
 			scores.clear();
 			maxtile.clear();
 		}
@@ -888,6 +894,9 @@ private:
 	std::vector<feature*> feats;
 	std::vector<int> scores;
 	std::vector<int> maxtile;
+
+	// add a empty list call mean_score
+	std::vector<float> mean_score;
 };
 
 int main(int argc, const char* argv[]) {
@@ -896,7 +905,7 @@ int main(int argc, const char* argv[]) {
 
 	// set the learning parameters
 	float alpha = 0.1;
-	size_t total = 10000;
+	size_t total = 3000;
 	unsigned seed;   //seed 只能是無負號整數
 	__asm__ __volatile__ ("rdtsc" : "=a" (seed));
 	info << "alpha = " << alpha << std::endl;
@@ -912,8 +921,9 @@ int main(int argc, const char* argv[]) {
 	// tdl.add_feature(new pattern({ 0, 1, 2, 3, 6, 7 }));
 	// tdl.add_feature(new pattern({ 4, 5, 6, 7, 10, 11 }));
 
+
 	// restore the model from file
-	tdl.load("henry_weight.bin");
+	// tdl.load("henry_weight.bin");
 
 	// train the model
 	std::vector<state> path;
@@ -946,6 +956,12 @@ int main(int argc, const char* argv[]) {
 		tdl.make_statistic(n, b, score);
 		path.clear();
 	}
+
+	// use matplotlibcpp to draw the graph
+	plt::plot(tdl.mean_score);
+	plt::show();
+	//save the graph
+	plt::save("henry_mean_score.png");
 
 	// store the model into file
 	tdl.save("henry_weight.bin");
