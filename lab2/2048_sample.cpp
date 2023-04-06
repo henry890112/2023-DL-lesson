@@ -1,8 +1,8 @@
 /**
  * Temporal Difference Learning Demo for Game 2048
- * use 'g++ -std=c++0x -O3 -g -o 2048 2048.cpp' to compile the source
+ * use 'g++ -std=c++0x -O3 -g -o 2048 2048_sample.cpp' to compile the source
  * https://github.com/moporgic/TDL2048-Demo
- *
+ * 
  * Computer Games and Intelligence (CGI) Lab, NCTU, Taiwan
  * http://www.aigames.nctu.edu.tw
  *
@@ -26,9 +26,6 @@
 #include <sstream>
 #include <fstream>
 #include <cmath>
-
-#include "matplotlibcpp.h"
-namespace plt = matplotlibcpp;
 
 /**
  * output streams
@@ -894,7 +891,7 @@ private:
 	std::vector<feature*> feats;
 	std::vector<int> scores;
 	std::vector<int> maxtile;
-
+public:
 	// add a empty list call mean_score
 	std::vector<float> mean_score;
 };
@@ -904,8 +901,8 @@ int main(int argc, const char* argv[]) {
 	learning tdl;
 
 	// set the learning parameters
-	float alpha = 0.1;
-	size_t total = 3000;
+	float alpha = 0.5;
+	size_t total = 10000;
 	unsigned seed;   //seed 只能是無負號整數
 	__asm__ __volatile__ ("rdtsc" : "=a" (seed));
 	info << "alpha = " << alpha << std::endl;
@@ -923,7 +920,7 @@ int main(int argc, const char* argv[]) {
 
 
 	// restore the model from file
-	// tdl.load("henry_weight.bin");
+	tdl.load("henry_weight.bin");
 
 	// train the model
 	std::vector<state> path;
@@ -954,14 +951,21 @@ int main(int argc, const char* argv[]) {
 		// update by TD(0)
 		tdl.update_episode(path, alpha);
 		tdl.make_statistic(n, b, score);
+
 		path.clear();
 	}
 
-	// use matplotlibcpp to draw the graph
-	plt::plot(tdl.mean_score);
-	plt::show();
-	//save the graph
-	plt::save("henry_mean_score.png");
+
+	//save the mean score in the vector csv
+	std::ofstream csv;
+	csv.open("henry_mean_score.csv", std::ios::out | std::ios::trunc);
+	if (csv.is_open()) {
+		for (int i = 0; i < tdl.mean_score.size(); i++) {
+			csv << tdl.mean_score[i] << std::endl;
+		}
+		csv.flush();
+		csv.close();
+	}
 
 	// store the model into file
 	tdl.save("henry_weight.bin");
