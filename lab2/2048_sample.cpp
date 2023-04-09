@@ -72,6 +72,7 @@ public:
 	/**
 	 * get a 4-bit tile
 	 */
+	// at為取出board index i中的數值,為4bit, 因為最大值為2048(2^11),存為1011(8+2+1)
 	int  at(int i) const { return (raw >> (i << 2)) & 0x0f; }
 	/**
 	 * set a 4-bit tile
@@ -729,6 +730,7 @@ public:
 	 *
 	 * you may simply return state() if no valid move
 	 */
+	
 	state select_best_move(const board& b) const {
 		state after[4] = { 0, 1, 2, 3 }; // up, right, down, left
 		state* best = after;
@@ -737,8 +739,25 @@ public:
 				// TODO
 				//選出最好的環境state(對全部estimate的環境做平均)
 				// 選擇最佳的環境state(b)
-				//利用平均的方式
-				move->set_value(move->reward() + estimate(move->after_state()));
+
+				board after_move_state = move->after_state();
+				float estimate_value = 0;
+				int num = 0;
+
+				for(int i = 0; i < 16; i++){
+					if(after_move_state.at(i)==0){
+						// popup 2 90% 
+						after_move_state.set(i,1);
+						estimate_value += 0.9*estimate(after_move_state);
+						// popup 4 10% 
+						after_move_state.set(i,2);
+						estimate_value += 0.1*estimate(after_move_state);
+						after_move_state.set(i,0);
+						num++;
+					}
+				}
+				estimate_value = estimate_value/num;
+				move->set_value(move->reward() + estimate_value);
 				if (move->value() > best->value())
 					best = move;
 			} else {
@@ -769,9 +788,9 @@ public:
 		float target = 0;
 		for (path.pop_back() /* terminal state */; path.size(); path.pop_back()) {
 			state& move = path.back();
-			float error = target - estimate(move.after_state());
-			target = move.reward() + update(move.after_state(), alpha * error);
-			debug << "update error = " << error << " for" << std::endl << move.after_state();
+			float error = target - estimate(move.before_state());
+			target = move.reward() + update(move.before_state(), alpha * error);
+			debug << "update error = " << error << " for" << std::endl << move.before_state();
 		}
 	}
 
@@ -826,7 +845,7 @@ public:
 			}
 
 			//display the current board 
-			info << b << std::endl;
+			// info << b << std::endl;
 			//store the mean score in the vector mean_score and draw the graph
 			mean_score.push_back(mean);
 	
@@ -901,8 +920,8 @@ int main(int argc, const char* argv[]) {
 	learning tdl;
 
 	// set the learning parameters
-	float alpha = 0.5;
-	size_t total = 10000;
+	float alpha = 0.1;
+	size_t total = 100000;
 	unsigned seed;   //seed 只能是無負號整數
 	__asm__ __volatile__ ("rdtsc" : "=a" (seed));
 	info << "alpha = " << alpha << std::endl;
@@ -920,7 +939,7 @@ int main(int argc, const char* argv[]) {
 
 
 	// restore the model from file
-	tdl.load("henry_weight.bin");
+	// tdl.load("henry_weight.bin");
 
 	// train the model
 	std::vector<state> path;
@@ -958,7 +977,7 @@ int main(int argc, const char* argv[]) {
 
 	//save the mean score in the vector csv
 	std::ofstream csv;
-	csv.open("henry_mean_score.csv", std::ios::out | std::ios::trunc);
+	csv.open("henry_mean_score_change_tuple.csv", std::ios::out | std::ios::trunc);
 	if (csv.is_open()) {
 		for (int i = 0; i < tdl.mean_score.size(); i++) {
 			csv << tdl.mean_score[i] << std::endl;
