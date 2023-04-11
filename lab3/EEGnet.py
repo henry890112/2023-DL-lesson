@@ -5,7 +5,9 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 import dataloader
 import matplotlib.pyplot as plt
-
+from torch.utils.data import DataLoader
+# use torch summary to print the model
+from torchsummary import summary
 
 class EEGNet(nn.Module):
     def __init__(self, mode):
@@ -22,7 +24,7 @@ class EEGNet(nn.Module):
             nn.BatchNorm2d(16, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
         )
         self.conv2 = nn.Sequential(
-            nn.Conv2d(16, 32, (2, 1), stride=(1, 1), bias=False),
+            nn.Conv2d(16, 32, (2, 1), stride=(1, 1), groups = 16, bias=False),
             nn.BatchNorm2d(32, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
             activate_func,
             nn.AvgPool2d(kernel_size=(1, 4), stride=(1, 4), padding=0),
@@ -130,7 +132,7 @@ class EEGNet(nn.Module):
         plt.legend()
         plt.show()
         # save the figure
-        plt.savefig('EEGNet.png', dpi=500)
+        plt.savefig('EEGNet777.png', dpi=500)
         
 
 # main function
@@ -165,6 +167,7 @@ if __name__ == '__main__':
     # ELU
     model = EEGNet(mode = "ELU")
     model.to(device)
+    summary(model, (1, 2, 750))
     model.train(train_data, train_label, test_data, test_label)
     ELU_train_list, ELU_test_list = model.get_train_and_test_list()
     # find the best test accuracy
@@ -195,6 +198,7 @@ if __name__ == '__main__':
     # visualize the accuracy and save the figure
     model.visualize(ELU_train_list, ELU_test_list, ReLU_train_list, ReLU_test_list, LeakyReLU_train_list, LeakyReLU_test_list)
     print("Finish EEGNet all")
+    # use torch summary to see the model structure
 
 
 
