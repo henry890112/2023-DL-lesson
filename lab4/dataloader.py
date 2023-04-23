@@ -1,6 +1,12 @@
 import pandas as pd
 from torch.utils import data
 import numpy as np
+from torch.utils.data.dataset import Dataset
+from torchvision import transforms
+import os
+from PIL import Image
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 def getData(mode):
@@ -29,6 +35,10 @@ class RetinopathyLoader(data.Dataset):
         self.mode = mode
         print("> Found %d images..." % (len(self.img_name)))
 
+        # crop the image in center
+        self.center_crop = transforms.CenterCrop(512)
+        self.to_tensor = transforms.ToTensor() # transforms.ToTensor()，它将输入数据转换为张量形式。这个操作会将像素值从0-255的范围映射到0-1之间的浮点数，并且交换图像的通道顺序。这使得输入数据可以被传递给PyTorch的神经网络模型进行训练。
+
     def __len__(self):
         """'return the size of dataset"""
         return len(self.img_name)
@@ -53,5 +63,36 @@ class RetinopathyLoader(data.Dataset):
                          
             step4. Return processed image and label
         """
+        # step1:get the image path use os
+        path = os.path.join(self.root, self.img_name[index] + '.jpeg')
 
+        # step2:get the ground truth label from  self.label
+        label = self.label[index]
+
+        # step3:transform the .jpeg rgb images
+        img = Image.open(path)
+        
+        min_size = img.size[0] if img.size[0]<img.size[1] else img.size[1] 
+        transforms_pre = transforms.Compose([transforms.CenterCrop(min_size), 
+                                             transforms.Resize((512, 512)),
+                                             transforms.RandomHorizontalFlip(p = 0.5),
+                                             transforms.RandomVerticalFlip(p = 0.5),
+                                             transforms.RandomRotation(degrees = 10), 
+                                             transforms.ToTensor()])
+        img = transforms_pre(img)
+
+        # img = self.center_crop(img)
+        # img = self.to_tensor(img)
+        # print(img.shape)        
         return img, label
+
+
+
+# print the np.squeeze(img.values), np.squeeze(label.values)
+img, label = getData('train')
+print(img.shape, label.shape)
+
+img = pd.read_csv('train_img.csv')
+label = pd.read_csv('train_label.csv')
+print(np.squeeze(img.values))
+print(np.squeeze(label.values))
