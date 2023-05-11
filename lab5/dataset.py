@@ -30,6 +30,7 @@ class bair_robot_pushing_dataset(Dataset):
         self.seed_is_set = False
         self.idx = 0
         self.cur_dir = self.dirs[0]
+        self.d = 0
                 
     def set_seed(self, seed):
         if not self.seed_is_set:
@@ -86,6 +87,8 @@ class bair_robot_pushing_dataset(Dataset):
 
     def __getitem__(self, index):
         self.set_seed(index)
-        seq = self.get_seq()
-        cond =  self.get_csv()
+        seq = self.get_seq()  # (seq_len, 3, 64, 64)
+        cond =  self.get_csv() # (seq_len, 4)
         return seq, cond
+
+
