@@ -31,10 +31,10 @@ def parse_args():
     parser.add_argument('--niter', type=int, default=300, help='number of epochs to train for')
     parser.add_argument('--epoch_size', type=int, default=600, help='epoch size')
     parser.add_argument('--tfr', type=float, default=1.0, help='teacher forcing ratio (0 ~ 1)')
-    parser.add_argument('--tfr_start_decay_epoch', type=int, default=120, help='The epoch that teacher forcing ratio become decreasing')
-    parser.add_argument('--tfr_decay_step', type=float, default=1/150, help='The decay step size of teacher forcing ratio (0 ~ 1)')
+    parser.add_argument('--tfr_start_decay_epoch', type=int, default=0, help='The epoch that teacher forcing ratio become decreasing')
+    parser.add_argument('--tfr_decay_step', type=float, default=1/300, help='The decay step size of teacher forcing ratio (0 ~ 1)')
     parser.add_argument('--tfr_lower_bound', type=float, default=0, help='The lower bound of teacher forcing ratio for scheduling teacher forcing ratio (0 ~ 1)')
-    parser.add_argument('--kl_anneal_cyclical', default=True, action='store_true', help='use cyclical mode')
+    parser.add_argument('--kl_anneal_cyclical', default=False, action='store_true', help='use cyclical mode')
     parser.add_argument('--kl_anneal_ratio', type=float, default=0.5, help='The decay ratio of kl annealing')
     parser.add_argument('--kl_anneal_cycle', type=int, default=3, help='The number of cycle for kl annealing during training (if use cyclical mode)')
     parser.add_argument('--seed', default=1, type=int, help='manual seed')
@@ -51,13 +51,11 @@ def parse_args():
     parser.add_argument('--last_frame_skip', action='store_true', help='if true, skip connections go between frame t and frame t+t rather than last ground truth frame')
     parser.add_argument('--cuda', default=True, action='store_true')  
     # add the train and test mode
-    parser.add_argument('--mode', default='train', help='train or test')
 
     args = parser.parse_args()
     return args
 # def the training process to use in the main
 def train(x, cond, modules, optimizer, kl_anneal, args, device):
-    torch.cuda.empty_cache()
     modules['frame_predictor'].zero_grad()
     modules['posterior'].zero_grad()
     modules['encoder'].zero_grad()
@@ -76,7 +74,7 @@ def train(x, cond, modules, optimizer, kl_anneal, args, device):
     mse = 0
     kld = 0
 
-    # when random[0, 1)大於tfr, 就不用teacher forcing
+    # when random[0, 1)小於tfr, 就不用teacher forcing
     use_teacher_forcing = True if random.random() < args.tfr else False
 
     # TODO training the cvae and use the teacher forcing(也就是groud truth) or not
@@ -105,7 +103,7 @@ def train(x, cond, modules, optimizer, kl_anneal, args, device):
             # posterior计算当前时刻的隐状态 z_t 的概率分布
             z_t, mu, logvar = modules['posterior'](h_target)
             ######2######
-            # 而這裡是用z_t和h_pred來預測下一個frame
+            # 而這裡是用z_t和gt來預測下一個frame
             # 利用自己先前所預測的frame來預測下一個frame，增加robustness
             # if use_teacher_forcing == False:就會使用ground truth去做訓練
             
@@ -113,9 +111,9 @@ def train(x, cond, modules, optimizer, kl_anneal, args, device):
             # 因為是cvae所以也要將x[i-1]的condition加入
             # print(cond[i-1].shape)  # torch.Size([12, 7])
             # only frame predictor的那個lstm要增加維度
-            h_pred = modules['frame_predictor'](torch.cat([cond[i-1], h, z_t], 1))
-            x_pred = modules['decoder']([h_pred, skip])
-            x_pred_seq.append(x_pred)
+            gt = modules['frame_predictor'](torch.cat([cond[i-1], h, z_t], 1))
+            x_pred = modules['decoder']([gt, skip])
+            # x_pred_seq.append(x_pred)
         else:
             ######1######
             # 當前frame的h
@@ -129,15 +127,15 @@ def train(x, cond, modules, optimizer, kl_anneal, args, device):
             # posterior计算当前时刻的隐状态 z_t 的概率分布
             z_t, mu, logvar = modules['posterior'](h_target)
             ######2######
-            # 而這裡是用z_t和h_pred來預測下一個frame
+            # 而這裡是用z_t和gt來預測下一個frame
             # 利用自己先前所預測的frame來預測下一個frame，增加robustness
             # if use_teacher_forcing == False:就會使用ground truth去做訓練
         
             # 因為是cvae所以也要將x[i-1]的condition加入
             # print(cond[i-1].shape)  # torch.Size([12, 7])
             # only frame predictor的那個lstm要增加維度
-            h_pred = modules['frame_predictor'](torch.cat([ cond[i-1], h, z_t], 1))
-            x_pred = modules['decoder']([h_pred, skip])
+            gt = modules['frame_predictor'](torch.cat([cond[i-1], h, z_t], 1))
+            x_pred = modules['decoder']([gt, skip])
             x_pred_seq.append(x_pred)
         #  利用預測的x_pred和真實的x[i]來計算mse
         mse += mse_criterion(x_pred, x[i])
@@ -149,13 +147,46 @@ def train(x, cond, modules, optimizer, kl_anneal, args, device):
     # beta = torch.tensor(beta)
     # reconstruction loss + KL loss
     loss = mse + kld * beta
-
-
     loss.backward()
-
     optimizer.step()
     # return loss, mse, kld的平均值 （n_past+n_future是論文中的z_{t+1}的維度, 也就是z_dim)
     return loss.detach().cpu().numpy() / (args.n_past + args.n_future), mse.detach().cpu().numpy() / (args.n_past + args.n_future), kld.detach().cpu().numpy() / (args.n_future + args.n_past)
+# def train(x, cond, modules, optimizer, kl_anneal, args, device):
+#     modules['frame_predictor'].zero_grad()
+#     modules['posterior'].zero_grad()
+#     modules['encoder'].zero_grad()
+#     modules['decoder'].zero_grad()
+
+#     # initialize the hidden state.
+#     modules['frame_predictor'].hidden = modules['frame_predictor'].init_hidden()
+#     modules['posterior'].hidden = modules['posterior'].init_hidden()
+#     mse = 0
+#     kld = 0
+#     reconstruction_loss = nn.MSELoss()
+#     use_teacher_forcing = True if random.random() < args.tfr else False
+    
+#     h_t = [[] for i in range (args.n_past + args.n_future)]
+#     for len in range(0, args.n_past + args.n_future):
+#         h_t[len] =  modules["encoder"](x[len])
+#     for i in range(1, args.n_past + args.n_future):
+#         if args.last_frame_skip or i < args.n_past:	
+#             _, skip = h_t[i-1]
+#         z_t, mu, logvar = modules["posterior"](h_t[i][0])
+#         g_t = modules['frame_predictor'](torch.cat([cond[i-1] ,h_t[i-1][0], z_t], 1))
+#         x_bar_t = modules['decoder']([g_t, skip])
+#         mse += reconstruction_loss(x_bar_t, x[i])
+#         kld += kl_criterion(mu, logvar, args)
+#         if not use_teacher_forcing :
+#             # 下一次的輸入就會是prediction的結果
+#             h_t[i] = modules['encoder'](x_bar_t)
+
+#     beta = kl_anneal.get_beta()
+#     loss = mse + kld * beta
+#     loss.backward()
+
+#     optimizer.step()
+
+#     return loss.detach().cpu().numpy() / (args.n_past + args.n_future), mse.detach().cpu().numpy() / (args.n_past + args.n_future), kld.detach().cpu().numpy() / (args.n_future + args.n_past)
 
 
 # annealing皆是用來解決gradient vanishing的問題
@@ -168,12 +199,12 @@ class kl_annealing():
         iter = args.niter * args.epoch_size
 
         # 先將所有的loss_weight設為1
-        self.L = np.ones(iter)
+        self.L = np.ones(iter+1)
 
         if (args.kl_anneal_cyclical==True):
             cycle = args.kl_anneal_cycle   # default = 3
         else:
-            cycle = 1   
+            cycle = 1
 
         period = iter/cycle
         ratio  = args.kl_anneal_ratio  # default = 0.5
@@ -212,7 +243,19 @@ def main():
     assert 0 <= args.tfr_start_decay_epoch 
     assert 0 <= args.tfr_decay_step and args.tfr_decay_step <= 1
 
-    if args.model_dir != '':
+    # if args.model_dir != '':
+    #     # load model and continue training from checkpoint
+    #     saved_model = torch.load('%s/model.pth' % args.model_dir)
+    #     optimizer = args.optimizer
+    #     model_dir = args.model_dir
+    #     niter = args.niter
+    #     args = saved_model['args']
+    #     args.optimizer = optimizer
+    #     args.model_dir = model_dir
+    #     args.log_dir = '%s/continued' % args.log_dir
+    #     start_epoch = saved_model['last_epoch']
+    #     print("Load the model success")
+    if args.model_dir == 'test':
         # load model and continue training from checkpoint
         saved_model = torch.load('%s/model.pth' % args.model_dir)
         optimizer = args.optimizer
@@ -221,9 +264,9 @@ def main():
         args = saved_model['args']
         args.optimizer = optimizer
         args.model_dir = model_dir
-        args.log_dir = '%s/continued' % args.log_dir
-        start_epoch = saved_model['last_epoch']
-        print("Load the model success")
+        args.log_dir = '%s/test' % args.model_dir
+        start_epoch = 0
+        print("Load the model to test")
     else:
         name = 'rnn_size=%d-predictor-posterior-rnn_layers=%d-%d-n_past=%d-n_future=%d-lr=%.4f-g_dim=%d-z_dim=%d-last_frame_skip=%s-beta=%.7f'\
             % (args.rnn_size, args.predictor_rnn_layers, args.posterior_rnn_layers, args.n_past, args.n_future, args.lr, args.g_dim, args.z_dim, args.last_frame_skip, args.beta)
@@ -326,64 +369,67 @@ def main():
         'encoder': encoder,
         'decoder': decoder,
     }
+
+    # change the mode here
+    mode = 'test'
     # --------- training loop ------------------------------------
+    if mode == 'train':
+        print('start training')
+        progress = tqdm(total=args.niter)
+        best_val_psnr = 0
+        for epoch in range(start_epoch, start_epoch + niter + 1):  # 才會跑到300
+            torch.cuda.empty_cache()
+            frame_predictor.train()
+            posterior.train()
+            encoder.train()   # .train() 就是跑forward
+            decoder.train()
 
-    progress = tqdm(total=args.niter)
-    best_val_psnr = 0
-    for epoch in range(start_epoch, start_epoch + niter):
-        torch.cuda.empty_cache()
-        frame_predictor.train()
-        posterior.train()
-        encoder.train()   # .train() 就是跑forward
-        decoder.train()
+            epoch_loss = 0
+            epoch_mse = 0
+            epoch_kld = 0
 
-        epoch_loss = 0
-        epoch_mse = 0
-        epoch_kld = 0
-
-        for _ in range(args.epoch_size):
-            try:
-                seq, cond = next(train_iterator)
-            except StopIteration:
-                train_iterator = iter(train_loader)
-                seq, cond = next(train_iterator)
-    
-            seq = seq.to(device)
-            cond = cond.to(device)
-            seq = seq.permute(1, 0, 2, 3 ,4)
-            cond = cond.permute(1, 0, 2)
-            loss, mse, kld = train(seq, cond, modules, optimizer, kl_anneal, args, device)
-            epoch_loss += loss
-            epoch_mse += mse
-            epoch_kld += kld
+            for _ in range(args.epoch_size):
+                try:
+                    seq, cond = next(train_iterator)
+                except StopIteration:
+                    train_iterator = iter(train_loader)
+                    seq, cond = next(train_iterator)
         
-        if epoch >= args.tfr_start_decay_epoch:
-            # TODO Update teacher forcing ratio 
-            args.tfr -= args.tfr_decay_step
-            if args.tfr < 0:
-                args.tfr = 0
+                seq = seq.to(device)
+                cond = cond.to(device)
+                seq = seq.permute(1, 0, 2, 3 ,4)
+                cond = cond.permute(1, 0, 2)
+                loss, mse, kld = train(seq, cond, modules, optimizer, kl_anneal, args, device)
+                epoch_loss += loss
+                epoch_mse += mse
+                epoch_kld += kld
+            
+            if epoch >= args.tfr_start_decay_epoch:
+                # TODO Update teacher forcing ratio 
+                args.tfr -= args.tfr_decay_step
+                if args.tfr <= args.tfr_lower_bound:
+                    args.tfr = 0
 
-        progress.update(1)
-        with open('./{}/train_record.txt'.format(args.log_dir), 'a') as train_record:
-            train_record.write(('[epoch: %02d] loss: %.5f | mse loss: %.5f | kld loss: %.5f | teacher ratio: %.5f | KL ratio: %.5f\n' % (epoch, epoch_loss  / args.epoch_size, epoch_mse / args.epoch_size, epoch_kld / args.epoch_size, args.tfr, kl_anneal.get_beta())))
-        # 存取epoch_weight
-        if (epoch%10==0):
-            torch.save({
-                        'encoder': encoder,
-                        'decoder': decoder,
-                        'frame_predictor': frame_predictor,
-                        'posterior': posterior,
-                        'args': args,
-                        'last_epoch': epoch},
-                        '%s/epoch_weight/model_epoch%s.pth' % (args.log_dir,str(epoch)))
+            progress.update(1)
+            with open('./{}/train_record.txt'.format(args.log_dir), 'a') as train_record:
+                train_record.write(('[epoch: %02d] loss: %.5f | mse loss: %.5f | kld loss: %.5f | teacher ratio: %.5f | KL ratio: %.5f\n' % (epoch, epoch_loss  / args.epoch_size, epoch_mse / args.epoch_size, epoch_kld / args.epoch_size, args.tfr, kl_anneal.get_beta())))
+            # 存取epoch_weight
+            if (epoch%10==0):
+                torch.save({
+                            'encoder': encoder,
+                            'decoder': decoder,
+                            'frame_predictor': frame_predictor,
+                            'posterior': posterior,
+                            'args': args,
+                            'last_epoch': epoch},
+                            '%s/epoch_weight/model_epoch%s.pth' % (args.log_dir,str(epoch)))
 
-        frame_predictor.eval()
-        encoder.eval()
-        decoder.eval()
-        posterior.eval()
+            frame_predictor.eval()
+            encoder.eval()
+            decoder.eval()
+            posterior.eval()
 
-        if args.mode == 'train':
-            # TODO train
+                # TODO train
             if epoch % 5 == 0:
                 psnr_list = []
                 for _ in range(len(validate_data) // args.batch_size):
@@ -416,6 +462,7 @@ def main():
                         'args': args,
                         'last_epoch': epoch},
                         '%s/model.pth' % args.log_dir)
+                    print("save the new model in epoch {}".format(epoch))
 
                 print("best_val_psnr: ", best_val_psnr)
                 
@@ -429,24 +476,28 @@ def main():
 
                 validate_seq = validate_seq.permute(1, 0, 2, 3, 4).to(device)
                 validate_cond = validate_cond.permute(1, 0, 2).to(device)
-                # plot_pred(validate_seq, validate_cond, modules, epoch, args, device)
-        elif args.mode == 'test':
-            test_psnr_list = []
-            for _ in range(len(test_data) // args.batch_size):
-                try:
-                    test_seq, test_cond = next(test_iterator)
-                except StopIteration:
-                    test_iterator = iter(test_loader)
-                    test_seq, test_cond = next(test_iterator)
-                test_seq = test_seq.permute(1, 0, 2, 3, 4).to(device)
-                test_cond = test_cond.permute(1, 0, 2).to(device)
-                pred_seq = pred(test_seq, test_cond, modules, args, device)
-                # plot_pred(test_seq, test_cond, modules, args)
-                _, _, psnr = finn_eval_seq(test_seq[args.n_past:args.n_past+args.n_future], pred_seq[args.n_past:args.n_past+args.n_future])
-                test_psnr_list.append(psnr)
-                    
-            ave_psnr = np.mean(np.concatenate(psnr))
-            print("TEST PSNR: ", ave_psnr)
+                plot_pred(validate_seq, validate_cond, modules, args)
+
+    elif mode == 'test':
+        print("start testing")
+        test_psnr_list = []
+        for _ in range(len(test_data) // args.batch_size):
+            try:
+                test_seq, test_cond = next(test_iterator)
+            except StopIteration:
+                test_iterator = iter(test_loader)
+                test_seq, test_cond = next(test_iterator)
+            test_seq = test_seq.permute(1, 0, 2, 3, 4).to(device)
+            test_cond = test_cond.permute(1, 0, 2).to(device)
+            pred_seq = pred(test_seq, test_cond, modules, args, device)
+            plot_pred(test_seq, test_cond, modules, args)
+            _, _, psnr = finn_eval_seq(test_seq[args.n_past:args.n_past+args.n_future], pred_seq[args.n_past:args.n_past+args.n_future])
+            test_psnr_list.append(psnr)
+                
+        ave_psnr = np.mean(np.concatenate(psnr))
+        print("TEST PSNR: ", ave_psnr)
+        print("Finish testing")
+
 if __name__ == '__main__':
     main()
         
