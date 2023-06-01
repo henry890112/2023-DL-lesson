@@ -14,23 +14,30 @@ import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from atari_wrappers import wrap_deepmind, make_atari
 
-
+# use this buffer to save the data
 class ReplayMemory(object):
     ## TODO ##
-    def __init__(self):
+
+    __slots__ = ['buffer'] 
+    def __init__(self, capacity):
+        self.buffer = deque(maxlen=capacity)
+
+
+    # def push(self, state, action, reward, done):
+    def push(self, *transition):
+        """Saves a transition"""    
+        self.buffer.append(tuple(map(tuple, transition)))
         
 
-
-    def push(self, state, action, reward, done):
-        """Saves a transition"""
-        
-
-    def sample(self):
+    def sample(self, batch_size, device):
         """Sample a batch of transitions"""
-        
+        trans_sample = random.sample(self.buffer, batch_size)
+        # trans_sample = np.array(trans_sample) 
+        return (torch.tensor(x, dtype=torch.float, device=device) for x in zip( *trans_sample ))
 
     def __len__(self):
-        return self.size
+        # return self.size
+        return len(self.buffer)
 
 
 class Net(nn.Module):
@@ -59,10 +66,15 @@ class Net(nn.Module):
         return x
 
     def _initialize_weights(self):
+        # 檢查變數 m 是否為 PyTorch 中的 nn.Conv2d 類別的實例
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
+                # 使用的是 Kaiming 正態分佈初始化方法。具體來說，它會將每個權重的值從一個以 0 為中心、
+                # 標準差為 sqrt(2 / fan_out) 的正態分佈中隨機取樣。其中，fan_out 是該層輸出的神經元數量。
+                # 此外，這個初始化方法是針對使用 ReLU 激活函數的神經網路進行優化的，因為它可以避免梯度消失的問題。
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
                 if m.bias is not None:
+                    # 可以將參數初始化為一個常數值。
                     nn.init.constant_(m.bias, 0.0)
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.constant_(m.weight, 1.0)
@@ -84,6 +96,7 @@ class DQN:
         ## TODO ##
         """Initialize replay buffer"""
         #self._memory = ReplayMemory(...)
+        self._memory = ReplayMemory(capacity=args.capacity)
 
         ## config ##
         self.device = args.device
@@ -95,13 +108,27 @@ class DQN:
     def select_action(self, state, epsilon, action_space):
         '''epsilon-greedy based on behavior network'''
         ## TODO ##
+        rnd = random.random()
+        if rnd < epsilon:
+            return np.random.randint(action_space.n)
+        else:
+            state = torch.from_numpy(state.__array__()).permute(2, 0, 1).float().unsqueeze(0).cuda()
+
+            # state = torch.from_numpy(state).float().unsqueeze(0).cuda()           
+            with torch.no_grad():
+                actions_value = self._behavior_net.forward(state)#state as input out put is action
+            action = np.argmax(actions_value.cpu().data.numpy()) #take max q action as action
+            
+        return action
         
 
-    def append(self, state, action, reward, done):
+    # def append(self, state, action, reward, done): #原本的輸入沒有next_state!!!!
+    def append(self, state, action, reward, next_state, done): 
         ## TODO ##
         """Push a transition into replay buffer"""
         #self._memory.push(...)
-
+        self._memory.push(state, [action], [reward / 10], next_state,
+                            [int(done)])
     def update(self, total_steps):
         if total_steps % self.freq == 0:
             self._update_behavior_network(self.gamma)
@@ -110,13 +137,34 @@ class DQN:
 
     def _update_behavior_network(self, gamma):
         # sample a minibatch of transitions
-        state, action, reward, next_state, done = self._memory.sample()
+        state, action, reward, next_state, done = self._memory.sample(self.batch_size, self.device) #自己有調整!!!!!!!!!
         ## TODO ##
-        
+        state = state.permute(0, 3, 1, 2)
+        next_state = next_state.permute(0, 3, 1, 2)
+        q_value = self._behavior_net(state).gather(1, action.long())
+        # time.sleep(10)
+
+        with torch.no_grad():
+            q_next = self._target_net(next_state)  
+            # print("q_next: ",q_next.shape)
+            # print("reward: ",reward.shape)
+            q_target = reward +self.gamma * q_next.max(1)[0].view(self.batch_size, 1)
+            # print("q_value: ",q_value.shape)
+            # print("q_target: ",q_target.shape)
+            # print(q_next.max(1)[0].shape)
+            # time.sleep(10)
+
+        criterion = nn.MSELoss()
+        loss = criterion(q_value, q_target)
+        self._optimizer.zero_grad()
+        loss.backward()
+        nn.utils.clip_grad_norm_(self._behavior_net.parameters(), 5)
+        self._optimizer.step()
 
     def _update_target_network(self):
         '''update target network by copying from behavior network'''
         ## TODO ##
+        self._target_net.load_state_dict(self._behavior_net.state_dict())
         
 
     def save(self, model_path, checkpoint=False):
@@ -141,7 +189,7 @@ class DQN:
 def train(args, agent, writer):
     print('Start Training')
     env_raw = make_atari('BreakoutNoFrameskip-v4')
-    env = wrap_deepmind(env_raw)
+    env = wrap_deepmind(env_raw, frame_stack=True)
     action_space = env.action_space
     total_steps, epsilon = 0, 1.
     ewma_reward = 0
@@ -162,21 +210,22 @@ def train(args, agent, writer):
                 epsilon = max(epsilon, args.eps_min)
 
             # execute action
-            state, reward, done, _ = env.step(action)
+            next_state, reward, done, _ = env.step(action)
 
             ## TODO ##
             # store transition
-            #agent.append(...)
+            agent.append(state, action, reward, next_state, done)
 
             if total_steps >= args.warmup:
                 agent.update(total_steps)
 
+            state = next_state
             total_reward += reward
 
-            if total_steps % args.eval_freq == 0:
-                """You can write another evaluate function, or just call the test function."""
-                test(args, agent, writer)
-                agent.save(args.model + "dqn_" + str(total_steps) + ".pt")
+            # if total_steps % args.eval_freq == 0:
+            #     """You can write another evaluate function, or just call the test function."""
+            #     test(args, agent, writer)
+            #     agent.save(args.model + "dqn_" + str(total_steps) + ".pt")
 
             total_steps += 1
             if done:
@@ -192,7 +241,7 @@ def train(args, agent, writer):
 def test(args, agent, writer):
     print('Start Testing')
     env_raw = make_atari('BreakoutNoFrameskip-v4')
-    env = wrap_deepmind(env_raw)
+    env = wrap_deepmind(env_raw, frame_stack=True)
     action_space = env.action_space
     e_rewards = []
     
@@ -202,8 +251,11 @@ def test(args, agent, writer):
         done = False
 
         while not done:
+            
+
+
             time.sleep(0.01)
-            env.render()
+            # env.render()
             action = agent.select_action(state, args.test_epsilon, action_space)
             state, reward, done, _ = env.step(action)
             e_reward += reward
@@ -234,7 +286,7 @@ def main():
     parser.add_argument('--target_freq', default=10000, type=int)
     parser.add_argument('--eval_freq', default=200000, type=int)
     # test
-    parser.add_argument('--test_only', action='store_true')
+    parser.add_argument('--test_only', default=False, action='store_true')
     parser.add_argument('-tmp', '--test_model_path', default='ckpt/dqn_1000000.pt')
     parser.add_argument('--render', action='store_true')
     parser.add_argument('--test_episode', default=10, type=int)

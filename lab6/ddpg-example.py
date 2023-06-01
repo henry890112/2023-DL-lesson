@@ -11,6 +11,8 @@ import gym
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.optim as optim
+
 from torch.utils.tensorboard import SummaryWriter
 
 
@@ -39,18 +41,26 @@ class ReplayMemory:
     def sample(self, batch_size, device):
         '''sample a batch of transition tensors'''
         ## TODO ##
-        raise NotImplementedError
+        transitions = random.sample(self.buffer, batch_size)
+        return (torch.tensor(x, dtype=torch.float, device=device)
+                for x in zip(*transitions))
 
 
 class ActorNet(nn.Module):
     def __init__(self, state_dim=8, action_dim=2, hidden_dim=(400, 300)):
         super().__init__()
         ## TODO ##
-        raise NotImplementedError
+        self.fc1 = nn.Linear(state_dim, hidden_dim[0])
+        self.fc2 = nn.Linear(hidden_dim[0], hidden_dim[1])
+        self.fc3 = nn.Linear(hidden_dim[1], action_dim)
 
     def forward(self, x):
         ## TODO ##
-        raise NotImplementedError
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        # 因為是continuous action space且action 皆為0-1，所以最後一層不用relu # 
+        x  = torch.tanh(self.fc3(x))
+        return x
 
 
 class CriticNet(nn.Module):
@@ -64,7 +74,7 @@ class CriticNet(nn.Module):
         self.critic = nn.Sequential(
             nn.Linear(h1, h2),
             nn.ReLU(),
-            nn.Linear(h2, 1),
+            nn.Linear(h2, action_dim),
         )
 
     def forward(self, x, action):
@@ -81,12 +91,21 @@ class DDPG:
         self._target_actor_net = ActorNet().to(args.device)
         self._target_critic_net = CriticNet().to(args.device)
         # initialize target network
+        '''
+        将self._actor_net的权重和偏置复制到self._target_actor_net中，以实现目标网络的更新。
+        这是深度强化学习中常用的技术，用于减少目标网络和行动网络之间的偏差，从而提高训练效果。
+        用target net是因為它的参数不会在训练过程中更新，而是定期从行动网络中复制过来。
+        这样，我们就可以使用一个稳定的目标网络来计算目标值，从而提高训练的稳定性和效果。
+        '''
         self._target_actor_net.load_state_dict(self._actor_net.state_dict())
         self._target_critic_net.load_state_dict(self._critic_net.state_dict())
         ## TODO ##
         # self._actor_opt = ?
         # self._critic_opt = ?
-        raise NotImplementedError
+        # use adam optimizer import torch.optim as optim
+        self._actor_opt = optim.Adam(self._actor_net.parameters(), lr=args.lra)
+        self._critic_opt = optim.Adam(self._critic_net.parameters(), lr=args.lrc)
+
         # action noise
         self._action_noise = GaussianNoise(dim=2)
         # memory
@@ -101,14 +120,22 @@ class DDPG:
     def select_action(self, state, noise=True):
         '''based on the behavior (actor) network and exploration noise'''
         ## TODO ##
-        raise NotImplementedError
+        # state = torch.from_numpy(state).float().cuda() 和下面一樣意思
+        state = torch.tensor(state, dtype=torch.float, device=self.device)
+        # 因為net皆要在cuda上面運算，所以state也要轉成cuda
+        select_action = self._actor_net(state).cpu().data.numpy()
+        if noise:
+            select_action += self._action_noise.sample()
 
+        return select_action
+    
     def append(self, state, action, reward, next_state, done):
         self._memory.append(state, action, [reward / 100], next_state,
                             [int(done)])
 
     def update(self):
         # update the behavior networks
+        # 址更新裡面的optimizer參數
         self._update_behavior_network(self.gamma)
         # update the target networks
         self._update_target_network(self._target_actor_net, self._actor_net,
@@ -134,7 +161,21 @@ class DDPG:
         #    q_target = ?
         # criterion = ?
         # critic_loss = criterion(q_value, q_target)
-        raise NotImplementedError
+        q_value = critic_net(state, action)
+        '''
+        使用 torch.no_grad() 上下文管理器可以暫時關閉計算圖的構建，
+        從而節省內存並提高計算效率。只有這個功能嗎??????
+        '''
+        with torch.no_grad():
+            # use actor_net to get next action and input to target_critic_net
+            # 可看圖
+            a_next = target_actor_net(next_state)
+            q_next = target_critic_net(next_state, a_next)
+            q_target = reward + gamma * q_next * (1 - done)
+        criterion = nn.MSELoss()
+        critic_loss = criterion(q_value, q_target)
+        # raise NotImplementedError
+
         # optimize critic
         actor_net.zero_grad()
         critic_net.zero_grad()
@@ -146,7 +187,17 @@ class DDPG:
         ## TODO ##
         # action = ?
         # actor_loss = ?
-        raise NotImplementedError
+        # 利用當下的state去算出action，再利用critic_net去算出q_value
+        '''
+        Critic網絡則評估該動作的價值，然後更新Actor網絡的參數，
+        以使該動作產生更高的回報。值函數的更新是基於Q-learning，
+        使用Bellman方程進行更新。
+        '''
+        
+        action = actor_net(state)
+        actor_loss = -critic_net(state, action).mean()
+        # raise NotImplementedError
+
         # optimize actor
         actor_net.zero_grad()
         critic_net.zero_grad()
@@ -154,11 +205,16 @@ class DDPG:
         actor_opt.step()
 
     @staticmethod
-    def _update_target_network(target_net, net, tau):
+    def _update_target_network(target_net, behavior_net, tau):
         '''update target network by _soft_ copying from behavior network'''
-        for target, behavior in zip(target_net.parameters(), net.parameters()):
+        '''
+        软复制是一种更新目标网络的方法，它不是直接将行动网络的参数复制到目标网络中，
+        而是使用一种平滑的方式将行动网络的参数与目标网络的参数混合。这种方法可以使目标网络的更新更加平滑，从而提高训练的稳定性和效果。
+        '''
+        for target, behavior in zip(target_net.parameters(), behavior_net.parameters()):
             ## TODO ##
-            raise NotImplementedError
+            target.data.copy_(tau * behavior.data + (1 - tau) * target.data)
+            # raise NotImplementedError
 
     def save(self, model_path, checkpoint=False):
         if checkpoint:
@@ -204,7 +260,7 @@ def train(args, env, agent, writer):
                 action = agent.select_action(state)
             # execute action
             next_state, reward, done, _ = env.step(action)
-            # store transition
+            # store transition (st, at, rt, st+1) in R
             agent.append(state, action, reward, next_state, done)
             if total_steps >= args.warmup:
                 agent.update()
@@ -239,7 +295,26 @@ def test(args, env, agent, writer):
         #     if done:
         #         writer.add_scalar('Test/Episode Reward', total_reward, n_episode)
         #         ...
-        raise NotImplementedError
+        while True:
+            if args.render:
+                env.render() # 可視化
+            
+            action = agent.select_action(state)
+            # execute action
+            next_state, reward, done, _ = env.step(action)
+            # store transition (st, at, rt, st+1) in R
+            agent.append(state, action, reward, next_state, done)
+            
+            state = next_state
+            total_reward += reward
+
+            if done:
+                writer.add_scalar('Test/Episode Reward', total_reward, n_episode)
+                rewards.append(total_reward)
+                print('total_reward:',total_reward)
+                break
+
+        # raise NotImplementedError
     print('Average Reward', np.mean(rewards))
     env.close()
 
